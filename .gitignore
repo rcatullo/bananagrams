@@ -1,3 +1,6 @@
+sft.jsonl
+tmp_shards/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
