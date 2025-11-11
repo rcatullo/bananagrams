@@ -21,10 +21,40 @@ from typing import Iterable, List, Optional
 import boto3
 import numpy as np
 import requests
+import yaml
 from PIL import Image
 from tqdm import tqdm
 
 from mask import compute_mask
+
+
+# Load configuration
+def load_config(config_path: str = "config.yaml"):
+    """Load configuration from YAML file."""
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+# Global config (loaded at module import)
+CONFIG = load_config()
+
+# Extract config values
+APPLE_CDN_PREFIX = CONFIG["apple_cdn_prefix"]
+MANIFEST_URL = f"{APPLE_CDN_PREFIX}/jsonl/sft.jsonl"
+S3_BUCKET = CONFIG["s3_bucket"]
+S3_PREFIXES = CONFIG["s3_prefixes"]
+PROCESSED_IDS_PATH = CONFIG["processed_ids_path"]
+MANIFEST_CACHE = CONFIG["manifest_cache"]
+
+TRAIN_RATIO = CONFIG["train_ratio"]
+DEV_RATIO = CONFIG["dev_ratio"]
+TEST_RATIO = CONFIG["test_ratio"]
+
+EDIT_TYPES = CONFIG["edit_types"]
+
+SAMPLES_PER_SHARD = CONFIG["samples_per_shard"]
+REQUEST_TIMEOUT = CONFIG["request_timeout"]
+REQUEST_RETRIES = CONFIG["request_retries"]
 
 
 def get_split(sample_id: str) -> str:
@@ -42,37 +72,6 @@ def get_split(sample_id: str) -> str:
         return "dev"
     else:
         return "test"
-
-
-# Configuration
-APPLE_CDN_PREFIX = "https://ml-site.cdn-apple.com/datasets/pico-banana-300k/nb"
-MANIFEST_URL = f"{APPLE_CDN_PREFIX}/jsonl/sft.jsonl"
-S3_BUCKET = "pico-banana-400k"
-S3_PREFIXES = {
-    "train": "processed/webdataset/train",
-    "dev": "processed/webdataset/dev",
-    "test": "processed/webdataset/test",
-}
-PROCESSED_IDS_PATH = "processed_ids.txt"
-MANIFEST_CACHE = "sft.jsonl"
-
-# Split ratios
-TRAIN_RATIO = 0.90  # 90% training
-DEV_RATIO = 0.05    # 5% dev
-TEST_RATIO = 0.05   # 5% test
-
-EDIT_TYPES = [
-    "Add a new object to the scene",
-    "Remove an existing object",
-    "Replace one object category with another",
-    "Change an object's attribute (e.g., color/material)",
-    "Relocate an object (change its position/spatial relation)",
-    "Change the size/shape/orientation of an object",
-]
-
-SAMPLES_PER_SHARD = 2048
-REQUEST_TIMEOUT = 10.0
-REQUEST_RETRIES = 3
 
 
 @dataclass

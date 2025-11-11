@@ -1,0 +1,35 @@
+# Bananagrams Dataset Builder Configuration
+
+# Apple CDN settings
+apple_cdn_prefix: "https://ml-site.cdn-apple.com/datasets/pico-banana-300k/nb"
+
+# S3 settings
+s3_bucket: "pico-banana-400k"
+s3_prefixes:
+  train: "processed/webdataset/train"
+  dev: "processed/webdataset/dev"
+  test: "processed/webdataset/test"
+
+# File paths
+processed_ids_path: "processed_ids.txt"
+manifest_cache: "sft.jsonl"
+
+# Dataset split ratios (must sum to 1.0)
+train_ratio: 0.90  # 90% training
+dev_ratio: 0.05    # 5% dev
+test_ratio: 0.05   # 5% test
+
+# Edit types to include in dataset
+edit_types:
+  - "Add a new object to the scene"
+  - "Remove an existing object"
+  - "Replace one object category with another"
+  - "Change an object's attribute (e.g., color/material)"
+  - "Relocate an object (change its position/spatial relation)"
+  - "Change the size/shape/orientation of an object"
+
+# Processing settings
+samples_per_shard: 2048
+request_timeout: 10.0
+request_retries: 3
+

@@ -35,8 +35,19 @@ Each processed sample includes:
 ## Requirements
 
 ```bash
-pip install boto3 pillow opencv-python requests tqdm numpy
+pip install -r requirements.txt
 ```
+
+## Configuration
+
+All settings are configured in `config.yaml`. Key settings include:
+
+- **Split ratios**: `train_ratio`, `dev_ratio`, `test_ratio` (must sum to 1.0)
+- **Edit types**: List of edit categories to include in the dataset
+- **Processing**: `samples_per_shard`, `request_timeout`, `request_retries`
+- **S3 settings**: Bucket and prefix paths for uploading
+
+See `config.yaml` for all available options.
 
 ## Usage
 
@@ -99,6 +110,8 @@ Samples are **deterministically assigned** to splits using MD5 hash of sample ID
 - **`build.py`** - Main dataset builder
 - **`mask.py`** - Mask computation module (SIFT alignment, edge detection, filtering)
 - **`validate.py`** - Mask validation and visualization tool
+- **`config.yaml`** - Configuration file (edit to customize behavior)
+- **`requirements.txt`** - Python dependencies
 - **`processed_ids.txt`** - Tracks successfully processed samples (auto-generated)
 - **`sft.jsonl`** - Cached manifest from Apple (auto-downloaded)
 

@@ -1,0 +1,8 @@
+boto3
+pillow
+opencv-python
+requests
+tqdm
+numpy
+pyyaml
+
