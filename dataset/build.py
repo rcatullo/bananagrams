@@ -51,14 +51,13 @@ REQUEST_TIMEOUT = CONFIG["request_timeout"]
 REQUEST_RETRIES = CONFIG["request_retries"]
 
 
-def get_split(sample_id: str) -> str:
+def get_split_for_shard(shard_index: int) -> str:
     """
-    Deterministically assign sample to train/dev/test split.
+    Deterministically assign shard to train/dev/test split.
     
-    Uses MD5 hash of sample_id for reproducible assignment.
+    Uses shard index modulo 100 for reproducible assignment.
     """
-    hash_val = int(hashlib.md5(sample_id.encode()).hexdigest(), 16)
-    ratio = (hash_val % 100) / 100.0
+    ratio = (shard_index % 100) / 100.0
     
     if ratio < TRAIN_RATIO:
         return "train"
@@ -340,7 +339,7 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
     """
     Main dataset building pipeline.
     
-    Deterministically splits samples into train/dev/test sets.
+    Assigns entire shards to train/dev/test splits (not individual samples).
     
     Args:
         dev_mode: If True, extract shards locally instead of uploading to S3
@@ -364,9 +363,22 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
     
     stats = Stats()
     
-    # Separate buffers and shard indices for each split
-    split_buffers = {"train": [], "dev": [], "test": []}
+    # Calculate starting shard index based on already processed samples
+    num_processed = len(processed_ids)
+    global_shard_index = num_processed // SAMPLES_PER_SHARD
+    
+    # Calculate per-split shard indices
     split_indices = {"train": 0, "dev": 0, "test": 0}
+    for i in range(global_shard_index):
+        split = get_split_for_shard(i)
+        split_indices[split] += 1
+    
+    if global_shard_index > 0:
+        print(f"Resuming from global shard index {global_shard_index}")
+        print(f"Per-split shard indices: {split_indices}")
+    
+    # Single buffer for all samples, shard assigned to split when flushed
+    sample_buffer = []
     split_counts = {"train": 0, "dev": 0, "test": 0}
     
     line_iter = iter_manifest_lines(MANIFEST_URL, None, MANIFEST_CACHE)
@@ -376,44 +388,46 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
         if sample is None:
             continue
         
-        # Determine which split this sample belongs to
-        split = get_split(sample.sample_id)
-        split_buffers[split].append(sample)
-        split_counts[split] += 1
-        
-        total_samples = sum(split_counts.values())
+        sample_buffer.append(sample)
         
         # Check if we've hit max samples
-        if max_samples and total_samples >= max_samples:
+        if max_samples and len(sample_buffer) >= max_samples:
             break
         
-        # Check if any split's shard is full
-        for split_name in ["train", "dev", "test"]:
-            if len(split_buffers[split_name]) >= SAMPLES_PER_SHARD:
-                flush_shard(
-                    split_buffers[split_name],
-                    split_indices[split_name],
-                    split_name,
-                    processed_ids,
-                    dev_mode,
-                    dev_extract_dir,
-                    s3_client
-                )
-                split_indices[split_name] += 1
-                split_buffers[split_name] = []
-    
-    # Flush remaining samples in all splits
-    for split_name in ["train", "dev", "test"]:
-        if split_buffers[split_name]:
+        # Check if shard is full
+        if len(sample_buffer) >= SAMPLES_PER_SHARD:
+            # Assign this shard to a split based on global shard index
+            split = get_split_for_shard(global_shard_index)
+            
             flush_shard(
-                split_buffers[split_name],
-                split_indices[split_name],
-                split_name,
+                sample_buffer,
+                split_indices[split],
+                split,
                 processed_ids,
                 dev_mode,
                 dev_extract_dir,
                 s3_client
             )
+            
+            # Update counters
+            split_counts[split] += len(sample_buffer)
+            split_indices[split] += 1
+            global_shard_index += 1
+            sample_buffer = []
+    
+    # Flush remaining samples
+    if sample_buffer:
+        split = get_split_for_shard(global_shard_index)
+        flush_shard(
+            sample_buffer,
+            split_indices[split],
+            split,
+            processed_ids,
+            dev_mode,
+            dev_extract_dir,
+            s3_client
+        )
+        split_counts[split] += len(sample_buffer)
     
     # Print statistics
     total_samples = sum(split_counts.values())
