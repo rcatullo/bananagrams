@@ -14,10 +14,14 @@ from typing import Optional
 import cv2
 import numpy as np
 from PIL import Image
+from config import load_config
 
+CONFIG = load_config()
 
-BLUR_KERNEL_SIZE = 7
-MORPHOLOGICAL_KERNEL_SIZE = 11
+BLUR_KERNEL_SIZE = CONFIG["blur_kernel_size"]
+MORPHOLOGICAL_KERNEL_SIZE = CONFIG["morphological_kernel_size"]
+MASK_THRESHOLD = CONFIG["mask_threshold"]
+TOP_K_COMPONENTS = CONFIG["top_k_components"]
 
 @dataclass
 class AlignmentResult:
@@ -232,8 +236,8 @@ def compute_mask(
     # Gaussian blur
     diff_mag = cv2.GaussianBlur(diff_mag.astype(np.float32), (BLUR_KERNEL_SIZE, BLUR_KERNEL_SIZE), 0)
     
-    # Threshold (50)
-    mask = (diff_mag > 50).astype(np.uint8) * 255
+    # Threshold
+    mask = (diff_mag > MASK_THRESHOLD).astype(np.uint8) * 255
     
     # Morphological operations
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (MORPHOLOGICAL_KERNEL_SIZE, MORPHOLOGICAL_KERNEL_SIZE))
@@ -253,7 +257,7 @@ def compute_mask(
     if borders['right'] > 0:
         mask[:, -borders['right']:] = 0
     
-    # Keep top-5 largest connected components AFTER edge removal
+    # Keep top-k largest connected components AFTER edge removal
     # This ensures we don't count edge artifacts as components
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     
@@ -262,8 +266,8 @@ def compute_mask(
         areas = [(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, num_labels)]
         areas.sort(key=lambda x: x[1], reverse=True)
         
-        # Keep top 5
-        keep_labels = set([idx for idx, _ in areas[:5]])
+        # Keep top-k largest connected components
+        keep_labels = set([idx for idx, _ in areas[:TOP_K_COMPONENTS]])
         
         cleaned_mask = np.zeros_like(mask)
         for label_idx in keep_labels:

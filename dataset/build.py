@@ -21,18 +21,12 @@ from typing import Iterable, List, Optional
 import boto3
 import numpy as np
 import requests
-import yaml
+from config import load_config
 from PIL import Image
 from tqdm import tqdm
 
 from mask import compute_mask
 
-
-# Load configuration
-def load_config(config_path: str = "config.yaml"):
-    """Load configuration from YAML file."""
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
 
 
 # Global config (loaded at module import)
