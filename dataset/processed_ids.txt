@@ -509,7 +509,8 @@ images/positive-edit/2608.png
 images/positive-edit/2612.png
 images/positive-edit/2618.png
 images/positive-edit/2623.png
-images/positive-edit/kf13vi_retry1.pngimages/positive-edit/23.png
+images/positive-edit/kf13vi_retry1.png
+images/positive-edit/23.png
 images/positive-edit/50.png
 images/positive-edit/kf12nq_retry1.png
 images/positive-edit/127.png
@@ -765,4 +766,3 @@ images/positive-edit/kf154w_retry1.png
 images/positive-edit/4583.png
 images/positive-edit/kf155b_retry1.png
 images/positive-edit/kf1559_retry1.png
-images/positive-edit/kf156d_retry1.pngimages/positive-edit/23.png
