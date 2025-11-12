@@ -13,6 +13,7 @@ import dataclasses
 import hashlib
 import io
 import json
+import logging
 import os
 import tarfile
 from dataclasses import dataclass
@@ -139,21 +140,42 @@ def iter_manifest_lines(
         return
     
     print(f"Downloading manifest from {url}...")
-    resp = requests.get(url, timeout=300)
+    # Stream the response to avoid loading entire manifest into memory
+    resp = requests.get(url, timeout=300, stream=True)
     resp.raise_for_status()
-    content = resp.text
-    print(f"Download complete ({len(resp.content)} bytes)")
     
+    # Open cache file if needed
+    cache_file = None
     if cache_path:
         os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
-        with open(cache_path, "w") as f:
-            f.write(content)
-        print(f"Cached to {cache_path}")
+        cache_file = open(cache_path, "w")
     
-    for i, line in enumerate(content.splitlines()):
-        if max_records and i >= max_records:
-            break
-        yield line
+    bytes_downloaded = 0
+    line_count = 0
+    
+    try:
+        # Stream lines from response
+        for line_bytes in resp.iter_lines():
+            if line_bytes:  # Skip empty lines
+                line = line_bytes.decode('utf-8')
+                bytes_downloaded += len(line_bytes)
+                
+                # Write to cache if enabled
+                if cache_file:
+                    cache_file.write(line + '\n')
+                
+                # Yield the line
+                line_count += 1
+                if max_records and line_count > max_records:
+                    break
+                yield line
+        
+        print(f"Download complete (~{bytes_downloaded} bytes, {line_count} lines)")
+        if cache_path:
+            print(f"Cached to {cache_path}")
+    finally:
+        if cache_file:
+            cache_file.close()
 
 
 def process_manifest_line(
@@ -316,17 +338,21 @@ def flush_shard(
     shard_ids = [s.sample_id for s in samples]
     tar_path = write_tar_shard(samples, shard_index, "tmp_shards")
     
-    append_processed_ids(PROCESSED_IDS_PATH, shard_ids)
+    # Only append to processed_ids in production mode
+    if not dev_mode:
+        append_processed_ids(PROCESSED_IDS_PATH, shard_ids)
     processed_ids.update(shard_ids)
     
     if dev_mode:
         # Dev mode: extract locally
         extract_dir = extract_shard(tar_path, shard_index, split, dev_extract_dir or "dev_extracted")
         print(f"[{split.upper()}] Created shard {shard_index} at {tar_path} and extracted to {extract_dir} ({len(samples)} samples)")
+        logging.info(f"Flushed shard {shard_index} to {extract_dir} with {len(samples)} samples (dev mode)")
     else:
         # Production: upload to S3
         key = upload_to_s3(tar_path, shard_index, split, s3_client)
         print(f"[{split.upper()}] Uploaded shard {shard_index} to s3://{S3_BUCKET}/{key} ({len(samples)} samples)")
+        logging.info(f"Flushed shard {shard_index} to s3://{S3_BUCKET}/{key} with {len(samples)} samples")
         
         # Clean up tar file
         try:
@@ -345,6 +371,18 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
         dev_mode: If True, extract shards locally instead of uploading to S3
         max_samples: Maximum number of samples to process (for testing)
     """
+    # Set up logging to file
+    log_filename = "build_dataset.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_filename),
+            logging.StreamHandler()
+        ]
+    )
+    logging.info(f"Starting dataset build in {'DEV' if dev_mode else 'PRODUCTION'} mode")
+    
     os.makedirs("tmp_shards", exist_ok=True)
     
     processed_ids = load_processed_ids(PROCESSED_IDS_PATH)
@@ -387,6 +425,9 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
         sample = process_manifest_line(line, processed_ids, stats)
         if sample is None:
             continue
+        
+        # Log each positive sample
+        logging.info(f"Positive sample created: {sample.sample_id} (current shard buffer size: {len(sample_buffer) + 1})")
         
         sample_buffer.append(sample)
         
