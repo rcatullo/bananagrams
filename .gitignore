@@ -1,5 +1,8 @@
 sft.jsonl
 tmp_shards/
+dev_extracted/
+prof_new.out
+prof.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

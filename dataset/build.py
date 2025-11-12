@@ -13,11 +13,14 @@ import dataclasses
 import hashlib
 import io
 import json
+import time
 import logging
 import os
 import tarfile
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import boto3
 import numpy as np
@@ -25,13 +28,31 @@ import requests
 from config import load_config
 from PIL import Image
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 
 from mask import compute_mask
+CONFIG = load_config()
 
+REQUEST_RETRIES = CONFIG["request_retries"]
 
 
 # Global config (loaded at module import)
-CONFIG = load_config()
+session = requests.Session()
+
+#Some network settings
+retries = Retry(
+    total=REQUEST_RETRIES,
+    backoff_factor=0.5,
+    status_forcelist=(500, 502, 503, 504),
+)
+adapter = HTTPAdapter(
+    max_retries=retries,
+    pool_connections=50,
+    pool_maxsize=50,
+)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
 
 # Extract config values
 APPLE_CDN_PREFIX = CONFIG["apple_cdn_prefix"]
@@ -49,7 +70,8 @@ EDIT_TYPES = CONFIG["edit_types"]
 
 SAMPLES_PER_SHARD = CONFIG["samples_per_shard"]
 REQUEST_TIMEOUT = CONFIG["request_timeout"]
-REQUEST_RETRIES = CONFIG["request_retries"]
+
+download_pool = ThreadPoolExecutor(max_workers=8)
 
 
 def get_split_for_shard(shard_index: int) -> str:
@@ -111,18 +133,15 @@ def append_processed_ids(path: str, ids: List[str]) -> None:
 
 
 def download_image(url: str) -> Optional[Image.Image]:
-    """Download and load an image from URL."""
-    for _ in range(REQUEST_RETRIES):
-        try:
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-            if resp.status_code != 200:
-                continue
-            img = Image.open(io.BytesIO(resp.content))
-            img.load()
-            return img
-        except Exception:
-            continue
-    return None
+    try:
+        resp = session.get(url, timeout=REQUEST_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        img = Image.open(io.BytesIO(resp.content))
+        img.load()
+        return img
+    except Exception:
+        return None
 
 
 def iter_manifest_lines(
@@ -141,7 +160,7 @@ def iter_manifest_lines(
     
     print(f"Downloading manifest from {url}...")
     # Stream the response to avoid loading entire manifest into memory
-    resp = requests.get(url, timeout=300, stream=True)
+    resp = session.get(url, timeout=300, stream=True)
     resp.raise_for_status()
     
     # Open cache file if needed
@@ -177,7 +196,6 @@ def iter_manifest_lines(
         if cache_file:
             cache_file.close()
 
-
 def process_manifest_line(
     line: str,
     processed_ids: set,
@@ -191,12 +209,14 @@ def process_manifest_line(
     line = line.strip()
     if not line:
         return None
-    
+    t0 = time.perf_counter()
+
     try:
         rec = json.loads(line)
     except json.JSONDecodeError:
         return None
-    
+    t_json = time.perf_counter()
+
     edit_type = rec.get("edit_type")
     if edit_type not in EDIT_TYPES:
         return None
@@ -216,23 +236,38 @@ def process_manifest_line(
     text = rec.get("text") or ""
     summarized_text = rec.get("summarized_text") or ""
     output_url = f"{APPLE_CDN_PREFIX}/{output_image_rel}"
-    
-    input_img = download_image(input_url)
+
+    t1 = time.perf_counter()
+
+    fut_in  = download_pool.submit(download_image, input_url)
+    fut_out = download_pool.submit(download_image, output_url)
+
+    input_img = fut_in.result()
     if input_img is None:
         return None
     
-    output_img = download_image(output_url)
+    t2 = time.perf_counter()
+    output_img = fut_out.result()
     if output_img is None:
         return None
-    
+
+
+    t3 = time.perf_counter()
     stats.total_attempted += 1
-    
+
+    t4 = time.perf_counter()
     mask_result = compute_mask(input_img, output_img)
-    
+    t5 = time.perf_counter()
+
+
     if not mask_result.success:
         stats.alignment_failed += 1
         reason = mask_result.failure_reason
         stats.failure_reasons[reason] = stats.failure_reasons.get(reason, 0) + 1
+        logging.info(
+            f"TIMING sample={sample_id} json={t_json-t0:.4f}s "
+            f"dl_in={t2-t1:.4f}s dl_out={t3-t2:.4f}s mask={t5-t4:.4f}s (FAILED)"
+        )
         return None
     
     if mask_result.alignment_result:
@@ -242,10 +277,18 @@ def process_manifest_line(
             'num_matches': mask_result.alignment_result.num_matches,
             'inlier_ratio': mask_result.alignment_result.inlier_ratio,
         })
-    
+    t6 = time.perf_counter()
+
     input_bytes = encode_jpeg(input_img)
     mask_bytes = encode_png(mask_result.mask)
-    
+    t7 = time.perf_counter()
+    logging.info(
+        f"TIMING sample={sample_id} json={t_json-t0:.4f}s "
+        f"dl_in={t2-t1:.4f}s dl_out={t3-t2:.4f}s mask={t5-t4:.4f}s "
+        f"encode={t7-t6:.4f}s total={t7-t0:.4f}s"
+    )
+
+
     meta = {
         "open_image_input_url": input_url,
         "text": text,

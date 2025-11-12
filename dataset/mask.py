@@ -42,10 +42,23 @@ class MaskResult:
     failure_reason: str = ""
 
 
+def _resize_for_sift(arr: np.ndarray, max_side: int = 512):
+    """Return (small_arr, scale) where scale = small/full."""
+    h, w = arr.shape[:2]
+    long_side = max(h, w)
+    if long_side <= max_side:
+        return arr, 1.0  # no change
+    scale = max_side / long_side
+    new_w = int(round(w * scale))
+    new_h = int(round(h * scale))
+    small = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return small, scale
+
 def align_images_sift(
     input_arr: np.ndarray,
     output_arr: np.ndarray,
     min_inlier_ratio: float = 0.3,
+    max_side: int = 512,
 ) -> AlignmentResult:
     """
     Align output image to input using SIFT features.
@@ -59,11 +72,15 @@ def align_images_sift(
         AlignmentResult with aligned image and metrics
     """
     # Convert to grayscale
-    input_gray = cv2.cvtColor(input_arr, cv2.COLOR_RGB2GRAY)
-    output_gray = cv2.cvtColor(output_arr, cv2.COLOR_RGB2GRAY)
+    input_small, s_in = _resize_for_sift(input_arr, max_side)
+    output_small, s_out = _resize_for_sift(output_arr, max_side)
+
+    input_gray = cv2.cvtColor(input_small, cv2.COLOR_RGB2GRAY)
+    output_gray = cv2.cvtColor(output_small, cv2.COLOR_RGB2GRAY)
     
     # Detect SIFT features
-    detector = cv2.SIFT_create(nfeatures=2000)
+    #Changing from 2000 to 800 features
+    detector = cv2.SIFT_create(nfeatures=800)
     kp1, des1 = detector.detectAndCompute(input_gray, None)
     kp2, des2 = detector.detectAndCompute(output_gray, None)
     
@@ -89,9 +106,9 @@ def align_images_sift(
     src_pts = np.float32([kp2[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
     dst_pts = np.float32([kp1[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
     
-    H, mask_inliers = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    H_small, mask_inliers = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
     
-    if H is None:
+    if H_small is None:
         return AlignmentResult(None, False, len(good_matches), 0.0, "homography_failed")
     
     # Check alignment quality
@@ -102,12 +119,35 @@ def align_images_sift(
             None, False, len(good_matches), inlier_ratio,
             f"low_inlier_ratio_{inlier_ratio:.2f}"
         )
-    
+
+    # lift homography back to FULL resolution
+    # S_in maps full -> small input
+    # S_out maps full -> small output
+    S_in = np.array([[s_in, 0,    0],
+                     [0,    s_in, 0],
+                     [0,    0,    1]], dtype=np.float32)
+    S_out = np.array([[s_out, 0,     0],
+                      [0,     s_out, 0],
+                      [0,     0,     1]], dtype=np.float32)
+
+    # H_full = S_in^{-1} * H_small * S_out
+    S_in_inv = np.array([[1.0/s_in, 0,         0],
+                         [0,        1.0/s_in,  0],
+                         [0,        0,         1]], dtype=np.float32)
+    H_full = S_in_inv @ H_small @ S_out
+
+
     # Warp image
-    h, w = input_arr.shape[:2]
-    aligned = cv2.warpPerspective(output_arr, H, (w, h), flags=cv2.INTER_LINEAR)
-    
-    return AlignmentResult(aligned, True, len(good_matches), inlier_ratio, "")
+    h_full, w_full = input_arr.shape[:2]
+    aligned_full = cv2.warpPerspective(output_arr, H_full, (w_full, h_full), flags=cv2.INTER_LINEAR)
+
+    return AlignmentResult(
+        aligned_full,
+        True,
+        len(good_matches),
+        inlier_ratio,
+        ""
+    )
 
 
 def detect_edge_artifacts(image: np.ndarray, threshold: int = 15, min_border: int = 5) -> dict:
