@@ -132,6 +132,23 @@ def append_processed_ids(path: str, ids: List[str]) -> None:
             f.write(pid + "\n")
 
 
+def load_last_manifest_line(path: str = "last_manifest_line.txt") -> int:
+    """Load the last processed manifest line number."""
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                return int(f.read().strip())
+        except (ValueError, IOError):
+            return 0
+    return 0
+
+
+def save_last_manifest_line(line_num: int, path: str = "last_manifest_line.txt") -> None:
+    """Save the last processed manifest line number."""
+    with open(path, "w") as f:
+        f.write(str(line_num))
+
+
 def download_image(url: str) -> Optional[Image.Image]:
     try:
         resp = session.get(url, timeout=REQUEST_TIMEOUT)
@@ -148,11 +165,15 @@ def iter_manifest_lines(
     url: str,
     max_records: Optional[int] = None,
     cache_path: Optional[str] = None,
+    start_line: int = 0,
 ) -> Iterable[str]:
-    """Iterate manifest lines from URL or cache."""
+    """Iterate manifest lines from URL or cache, optionally starting from a specific line."""
     if cache_path and os.path.exists(cache_path):
         with open(cache_path, "r") as f:
             for i, line in enumerate(f):
+                # Skip lines before start_line
+                if i < start_line:
+                    continue
                 if max_records and i >= max_records:
                     break
                 yield line
@@ -430,6 +451,12 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
     
     processed_ids = load_processed_ids(PROCESSED_IDS_PATH)
     print(f"Loaded {len(processed_ids)} processed IDs from {PROCESSED_IDS_PATH}")
+    
+    # Load last manifest line for resume
+    last_line = load_last_manifest_line()
+    if last_line > 0:
+        print(f"Resuming from manifest line {last_line}")
+    
     print(f"Split ratios: Train={TRAIN_RATIO:.0%}, Dev={DEV_RATIO:.0%}, Test={TEST_RATIO:.0%}")
     
     if dev_mode:
@@ -462,17 +489,26 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
     sample_buffer = []
     split_counts = {"train": 0, "dev": 0, "test": 0}
     
-    line_iter = iter_manifest_lines(MANIFEST_URL, None, MANIFEST_CACHE)
+    line_iter = iter_manifest_lines(MANIFEST_URL, None, MANIFEST_CACHE, start_line=last_line)
     
-    for line in tqdm(line_iter, desc="Processing manifest", unit="line"):
+    current_line = last_line
+    for line in tqdm(line_iter, desc="Processing manifest", unit="line", initial=last_line):
+        current_line += 1
+        
         sample = process_manifest_line(line, processed_ids, stats)
         if sample is None:
+            # Save progress every 1000 lines even if no sample created
+            if current_line % 1000 == 0:
+                save_last_manifest_line(current_line)
             continue
         
         # Log each positive sample
         logging.info(f"Positive sample created: {sample.sample_id} (current shard buffer size: {len(sample_buffer) + 1})")
         
         sample_buffer.append(sample)
+        
+        # Save progress after each successful sample
+        save_last_manifest_line(current_line)
         
         # Check if we've hit max samples
         if max_samples and len(sample_buffer) >= max_samples:
@@ -512,6 +548,9 @@ def build_dataset(dev_mode: bool = False, max_samples: Optional[int] = None):
             s3_client
         )
         split_counts[split] += len(sample_buffer)
+    
+    # Save final line position
+    save_last_manifest_line(current_line)
     
     # Print statistics
     total_samples = sum(split_counts.values())

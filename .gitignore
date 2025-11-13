@@ -1,5 +1,6 @@
 # Dataset artifacts
 sft.jsonl
+last_manifest_line.txt
 tmp_shards/
 dev_extracted/
 prof_new.out
