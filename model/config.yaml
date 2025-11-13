@@ -50,9 +50,9 @@ data:
   normalize_mean: [0.485, 0.456, 0.406]  # ImageNet normalization
   normalize_std: [0.229, 0.224, 0.225]
   
-  num_train_samples: 2560  # 10 shards × 256 samples
-  num_val_samples: 512 # 2 shard × 256 samples
-  num_test_samples: 512 # 2 shard × 256 samples
+  num_train_samples: 2560  # 10 shards × 256 samples (padded to 12 for 4 workers)
+  num_val_samples: 512 # 2 shards × 256 samples (padded to 4 for 4 workers)
+  num_test_samples: 512 # 2 shards × 256 samples (padded to 4 for 4 workers)
   
   # Dataset paths (supports both local and S3)
   # For S3: use s3://bucket-name/prefix format
@@ -68,8 +68,8 @@ data:
   #val_shards: "shard-000000.tar"
   #test_shards: "shard-000000.tar"
   
-  num_workers: 2  # Set to 0 for local testing with single shard, increase for AWS
-  prefetch_factor: 1
+  num_workers: 4  # Changed from 2 - virtual padding ensures shard divisibility
+  prefetch_factor: 4
   pin_memory: true
   
   augmentation:

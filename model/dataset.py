@@ -9,6 +9,8 @@ Loads tar shards containing:
 
 import os
 import io
+import re
+import math
 from typing import Dict, Optional, Callable
 
 import torch
@@ -188,38 +190,84 @@ def create_webdataset(
     shard_pattern: str,
     transform: Callable,
     shuffle_buffer: int = 1000,
-    is_training: bool = True
+    is_training: bool = True,
+    num_workers: int = 1
 ):
     """
     Create WebDataset from tar shards (supports local paths and S3).
+    Implements virtual padding to ensure shard count is divisible by num_workers.
     
     Args:
         data_root: Root directory/S3 bucket containing shards
-        shard_pattern: Pattern for shard files (e.g., "train/shard-000000.tar")
+        shard_pattern: Pattern for shard files (e.g., "train/shard-{000000..000009}.tar")
         transform: Transform function to apply
         shuffle_buffer: Size of shuffle buffer
         is_training: Whether this is training data
+        num_workers: Number of data loader workers (for padding calculation)
     
     Returns:
         WebDataset instance
     """
-    # Build full shard path pattern
-    # Support both local paths and S3 URLs
-    if data_root.startswith('s3://'):
-        # S3 path - use pipe notation for aws s3 cp
-        # Pattern: pipe:aws s3 cp s3://bucket/prefix/shard-{000000..000099}.tar -
-        shard_path = f"pipe:aws s3 cp {data_root}/{shard_pattern} -"
-    else:
-        # Local path
-        shard_path = os.path.join(data_root, shard_pattern)
+    # Parse brace expansion pattern to build explicit shard list
+    # Pattern format: "train/shard-{000000..000009}.tar"
+    brace_match = re.search(r'\{(\d+)\.\.(\d+)\}', shard_pattern)
     
-    # Create dataset with proper shardshuffle value
-    dataset = (
-        wds.WebDataset(shard_path, shardshuffle=1000 if is_training else False)
-        .decode()
-        .map(decode_sample)
-        .map(transform)
-    )
+    if brace_match:
+        # Extract start and end indices
+        start_idx = int(brace_match.group(1))
+        end_idx = int(brace_match.group(2))
+        num_shards = end_idx - start_idx + 1
+        
+        # Get prefix and suffix
+        prefix = shard_pattern[:brace_match.start()]
+        suffix = shard_pattern[brace_match.end():]
+        
+        # Build list of shard paths
+        shard_list = []
+        for i in range(start_idx, end_idx + 1):
+            # Preserve zero-padding in format (e.g., 000000)
+            num_digits = len(brace_match.group(1))
+            shard_name = f"{prefix}{i:0{num_digits}d}{suffix}"
+            shard_list.append(shard_name)
+        
+        # Apply virtual padding if needed
+        if num_workers > 1 and num_shards % num_workers != 0:
+            # Calculate target count (round up to next multiple of num_workers)
+            target_count = math.ceil(num_shards / num_workers) * num_workers
+            padding_needed = target_count - num_shards
+            
+            # Cycle first shards to pad
+            for i in range(padding_needed):
+                shard_list.append(shard_list[i % num_shards])
+        
+        # Build full paths
+        if data_root.startswith('s3://'):
+            # S3 paths - use pipe notation for each shard
+            full_paths = [f"pipe:aws s3 cp {data_root}/{shard} -" for shard in shard_list]
+        else:
+            # Local paths
+            full_paths = [os.path.join(data_root, shard) for shard in shard_list]
+        
+        # Create dataset with explicit shard list
+        dataset = (
+            wds.WebDataset(full_paths, shardshuffle=1000 if is_training else False)
+            .decode()
+            .map(decode_sample)
+            .map(transform)
+        )
+    else:
+        # No brace expansion - single shard or already explicit list
+        if data_root.startswith('s3://'):
+            shard_path = f"pipe:aws s3 cp {data_root}/{shard_pattern} -"
+        else:
+            shard_path = os.path.join(data_root, shard_pattern)
+        
+        dataset = (
+            wds.WebDataset(shard_path, shardshuffle=1000 if is_training else False)
+            .decode()
+            .map(decode_sample)
+            .map(transform)
+        )
     
     # Shuffle for training
     if is_training and shuffle_buffer > 0:
@@ -286,7 +334,8 @@ def create_dataloaders(config: Dict):
         shard_pattern=data_config['train_shards'],
         transform=train_transform,
         shuffle_buffer=1000,
-        is_training=True
+        is_training=True,
+        num_workers=data_config['num_workers']
     )
     
     val_dataset = create_webdataset(
@@ -294,7 +343,8 @@ def create_dataloaders(config: Dict):
         shard_pattern=data_config['val_shards'],
         transform=val_transform,
         shuffle_buffer=0,
-        is_training=False
+        is_training=False,
+        num_workers=data_config['num_workers']
     )
     
     # Create dataloaders
@@ -304,7 +354,8 @@ def create_dataloaders(config: Dict):
         num_workers=data_config['num_workers'],
         pin_memory=data_config['pin_memory'],
         collate_fn=collate_fn,
-        prefetch_factor=data_config['prefetch_factor'] if data_config['num_workers'] > 0 else None
+        prefetch_factor=data_config['prefetch_factor'] if data_config['num_workers'] > 0 else None,
+        persistent_workers=True if data_config['num_workers'] > 0 else False
     )
     
     val_loader = DataLoader(
@@ -313,7 +364,8 @@ def create_dataloaders(config: Dict):
         num_workers=data_config['num_workers'],
         pin_memory=data_config['pin_memory'],
         collate_fn=collate_fn,
-        prefetch_factor=data_config['prefetch_factor'] if data_config['num_workers'] > 0 else None
+        prefetch_factor=data_config['prefetch_factor'] if data_config['num_workers'] > 0 else None,
+        persistent_workers=True if data_config['num_workers'] > 0 else False
     )
     
     return train_loader, val_loader
@@ -346,7 +398,8 @@ def create_test_dataloader(config: Dict):
         shard_pattern=data_config['test_shards'],
         transform=test_transform,
         shuffle_buffer=0,
-        is_training=False
+        is_training=False,
+        num_workers=data_config['num_workers']
     )
     
     # Create dataloader
@@ -356,7 +409,8 @@ def create_test_dataloader(config: Dict):
         num_workers=data_config['num_workers'],
         pin_memory=data_config['pin_memory'],
         collate_fn=collate_fn,
-        prefetch_factor=data_config['prefetch_factor'] if data_config['num_workers'] > 0 else None
+        prefetch_factor=data_config['prefetch_factor'] if data_config['num_workers'] > 0 else None,
+        persistent_workers=True if data_config['num_workers'] > 0 else False
     )
     
     return test_loader
