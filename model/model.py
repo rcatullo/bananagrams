@@ -417,7 +417,7 @@ class MaskPredictionModel(nn.Module):
         self.image_encoder = ImageEncoder(
             backbone=config['model']['image_encoder']['backbone'],
             pretrained=config['model']['image_encoder']['pretrained'],
-            freeze=config['model']['image_encoder']['freeze_backbone']
+            freeze=config['model']['image_encoder']['freeze']
         )
         
         # Text encoder

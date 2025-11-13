@@ -2,10 +2,11 @@ model:
   image_encoder:
     backbone: "resnet50"
     pretrained: true
-    freeze_backbone: true
+    freeze: true
     
   text_encoder:
     model_name: "ViT-B/32"  # CLIP model variant
+    freeze: true
     
   # Cross-attention fusion
   fusion:
@@ -19,7 +20,7 @@ model:
     use_skip_connections: true
 
 training:
-  batch_size: 8  # Adjust based on GPU memory
+  batch_size: 16  # Adjust based on GPU memory
   num_epochs: 50
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
@@ -50,24 +51,24 @@ data:
   normalize_std: [0.229, 0.224, 0.225]
   
   num_train_samples: 2048  # 8 shards × 256 samples
-  num_val_samples: null
-  num_test_samples: null
+  num_val_samples: 256 # 1 shard × 256 samples
+  num_test_samples: 256 # 1 shard × 256 samples
   
   # Dataset paths (supports both local and S3)
   # For S3: use s3://bucket-name/prefix format
   # For local: use relative or absolute path
-  # data_root: "s3://pico-banana-400k/processed/webdataset"
-  # train_shards: "train/shard-{000000..000999}.tar"  # Pattern for train shards
-  # val_shards: "dev/shard-{000000..000999}.tar"  # Pattern for validation shards
-  # test_shards: "test/shard-{000000..000999}.tar"  # Pattern for test shards
+  data_root: "s3://pico-banana-400k/processed/webdataset"
+  train_shards: "train/shard-{000000..000007}.tar"  # Pattern for train shards (8 shards)
+  val_shards: "train/shard-{000004..000007}.tar"  # Use last training shard for validation (temporary)
+  test_shards: "train/shard-{000004..000007}.tar"  # Use last training shard for test (temporary)
   
   # For local testing, uncomment:
-  data_root: "../dataset/tmp_shards"
-  train_shards: "shard-000000.tar"
-  val_shards: "shard-000000.tar"
-  test_shards: "shard-000000.tar"
+  #data_root: "../dataset/tmp_shards"
+  #train_shards: "shard-000000.tar"
+  #val_shards: "shard-000000.tar"
+  #test_shards: "shard-000000.tar"
   
-  num_workers: 0  # Set to 0 for local testing with single shard, increase for AWS
+  num_workers: 4  # Set to 0 for local testing with single shard, increase for AWS
   prefetch_factor: 2
   pin_memory: true
   

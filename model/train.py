@@ -13,7 +13,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -134,7 +134,7 @@ def train_one_epoch(
     metrics_tracker = MetricsTracker()
     
     use_amp = config['training']['use_amp']
-    scaler = GradScaler() if use_amp else None
+    scaler = GradScaler('cuda') if use_amp else None
     max_grad_norm = config['training']['max_grad_norm']
     
     log_every = config['logging']['log_every_n_steps']
@@ -153,7 +153,7 @@ def train_one_epoch(
         optimizer.zero_grad()
         
         if use_amp:
-            with autocast():
+            with autocast('cuda'):
                 pred_logits = model(images, text_tokens)
                 loss_dict = criterion(pred_logits, masks)
                 loss = loss_dict['loss']
@@ -204,7 +204,7 @@ def train_one_epoch(
             avg_metrics = metrics_tracker.get_averages()
             
             log_msg = (
-                f"Epoch {epoch} [{batch_idx+1}/{len(train_loader)}] "
+                f"Epoch {epoch} [{batch_idx+1}/{steps_per_epoch}] "
                 f"Loss: {avg_metrics['loss']:.4f} | "
                 f"IoU: {avg_metrics['iou']:.4f} | "
                 f"F1: {avg_metrics['f1']:.4f} | "
