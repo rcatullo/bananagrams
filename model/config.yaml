@@ -49,6 +49,10 @@ data:
   normalize_mean: [0.485, 0.456, 0.406]  # ImageNet normalization
   normalize_std: [0.229, 0.224, 0.225]
   
+  num_train_samples: 2048  # 8 shards × 256 samples
+  num_val_samples: null
+  num_test_samples: null
+  
   # Dataset paths (supports both local and S3)
   # For S3: use s3://bucket-name/prefix format
   # For local: use relative or absolute path

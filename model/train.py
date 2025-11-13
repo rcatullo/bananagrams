@@ -69,7 +69,7 @@ def create_optimizer(model, config):
     return optimizer
 
 
-def create_scheduler(optimizer, config, steps_per_epoch=None):
+def create_scheduler(optimizer, config, steps_per_epoch):
     """Create learning rate scheduler."""
     scheduler_name = config['training']['lr_scheduler'].lower()
     
@@ -80,8 +80,6 @@ def create_scheduler(optimizer, config, steps_per_epoch=None):
     warmup_epochs = config['training'].get('warmup_epochs', 0)
     
     if scheduler_name == 'cosine':
-        if steps_per_epoch is None:
-            steps_per_epoch = 1000  # Reasonable default
         total_steps = num_epochs * steps_per_epoch
         warmup_steps = warmup_epochs * steps_per_epoch
         
@@ -97,8 +95,6 @@ def create_scheduler(optimizer, config, steps_per_epoch=None):
         return scheduler
     
     elif scheduler_name == 'step':
-        if steps_per_epoch is None:
-            steps_per_epoch = 1000
         scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer,
             step_size=10 * steps_per_epoch,
@@ -130,7 +126,8 @@ def train_one_epoch(
     epoch,
     config,
     logger,
-    writer=None
+    writer=None,
+    steps_per_epoch=1000
 ):
     """Train for one epoch."""
     model.train()
@@ -144,9 +141,7 @@ def train_one_epoch(
     log_images_every = config['logging']['log_images_every_n_steps']
     
     pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
-    # WebDataset doesn't have len(), estimate global step
-    estimated_steps_per_epoch = 1000
-    global_step = epoch * estimated_steps_per_epoch
+    global_step = epoch * steps_per_epoch
     
     for batch_idx, batch in enumerate(pbar):
         # Move to device
@@ -349,10 +344,13 @@ def train(config, resume_checkpoint=None):
     param_counts = count_parameters(model)
     logger.info(f"Model parameters: {param_counts['total']:,} total, {param_counts['trainable']:,} trainable")
     
+    num_train_samples = config['data'].get('num_train_samples')
+    batch_size = config['training']['batch_size']
+    steps_per_epoch = (num_train_samples + batch_size - 1) // batch_size
+    logger.info(f"Calculated steps per epoch: {steps_per_epoch} ({num_train_samples} samples / batch size {batch_size})")
     # Create optimizer and scheduler
     optimizer = create_optimizer(model, config)
-    # WebDataset doesn't have len(), pass None and use default
-    scheduler = create_scheduler(optimizer, config, steps_per_epoch=None)
+    scheduler = create_scheduler(optimizer, config, steps_per_epoch=steps_per_epoch)
     
     criterion = CombinedLoss(
         bce_weight=config['loss']['bce_weight'],
@@ -392,7 +390,8 @@ def train(config, resume_checkpoint=None):
         
         train_metrics = train_one_epoch(
             model, train_loader, criterion, optimizer, scheduler,
-            device, epoch, config, logger, writer
+            device, epoch, config, logger, writer,
+            steps_per_epoch=steps_per_epoch
         )
         
         # Validate
