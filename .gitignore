@@ -1,3 +1,32 @@
+# Dataset artifacts
+sft.jsonl
+last_manifest_line.txt
+tmp_shards/
+dev_extracted/
+prof_new.out
+prof.out
+
+# Training artifacts
+checkpoints/
+logs/
+# runs/
+eval_results/
+wandb/
+
+# Data
+*.pth
+*.ckpt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
