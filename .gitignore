@@ -9,7 +9,7 @@ prof.out
 # Training artifacts
 checkpoints/
 logs/
-# runs/
+runs/
 eval_results/
 wandb/
 
