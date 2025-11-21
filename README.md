@@ -133,6 +133,4 @@ The following resources are available:
 
 - [Apple pico-banana-400k dataset](https://ml-site.cdn-apple.com/datasets/pico-banana-300k/nb)
 
-- [WebDataset documentation](https://webdataset.github.io/webdataset/)
-
 - [CLIP model repository](https://github.com/openai/CLIP)
