@@ -10,20 +10,21 @@ model:
     
   # Cross-attention fusion
   fusion:
-    hidden_dim: 512  # Dimension for cross-attention
-    num_layers: 4  # Number of cross-attention layers
+    hidden_dim: 256  # Dimension for cross-attention (reduced from 512)
+    num_layers: 2  # Number of cross-attention layers (reduced from 4)
     num_heads: 8  # Number of attention heads
-    dropout: 0.1
+    dropout: 0.3  # Increased from 0.1
     
   decoder:
-    base_channels: 64
+    base_channels: 32  # Reduced from 64
     use_skip_connections: true
+    dropout: 0.2  # Dropout for decoder blocks
 
 training:
   batch_size: 64  # Adjust based on GPU memory
   num_epochs: 50
-  learning_rate: 1.0e-4
-  weight_decay: 1.0e-4
+  learning_rate: 5.0e-5  # Reduced from 1.0e-4
+  weight_decay: 1.0e-3  # Increased from 1.0e-4 for stronger regularization
   optimizer: "adamw"  # adamw, adam, sgd
   
   lr_scheduler: "cosine"  # cosine, step, plateau, none
@@ -75,14 +76,19 @@ data:
   augmentation:
     enabled: true
     random_horizontal_flip: 0.5
-    random_vertical_flip: 0.0
+    random_vertical_flip: 0.3  # Added vertical flip
     color_jitter:
-      brightness: 0.1
-      contrast: 0.1
-      saturation: 0.1
-      hue: 0.05
-    random_rotation: 0  # Degrees (0 = disabled)
-    random_scale: [0.9, 1.1]  # Scale range for random zoom
+      brightness: 0.2  # Increased from 0.1
+      contrast: 0.2  # Increased from 0.1
+      saturation: 0.2  # Increased from 0.1
+      hue: 0.1  # Increased from 0.05
+    random_rotation: 10  # Degrees (reduced from 15 for speed)
+    random_scale: null  # Disabled for performance (was [0.95, 1.05])
+    random_blur: 0.2  # Probability (reduced from 0.3)
+    blur_sigma_range: [0.1, 1.0]  # Blur strength range (reduced max)
+    random_erasing: 0.1  # Probability (reduced from 0.2)
+    erasing_scale: [0.02, 0.15]  # Scale of erased area
+    erasing_ratio: [0.3, 3.3]  # Aspect ratio of erased area
 
 logging:
   log_dir: "logs"

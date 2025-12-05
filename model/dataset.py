@@ -17,7 +17,9 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-from PIL import Image
+import torchvision.transforms.functional as TF
+from PIL import Image, ImageFilter
+import numpy as np
 import webdataset as wds
 import clip
 
@@ -121,10 +123,30 @@ class MaskDatasetTransform:
                 )
             else:
                 self.color_jitter = None
+            
+            # Rotation
+            self.rotation_degrees = self.augmentation_config.get('random_rotation', 0)
+            
+            # Scale/zoom
+            self.scale_range = self.augmentation_config.get('random_scale', None)
+            
+            # Gaussian blur
+            self.blur_prob = self.augmentation_config.get('random_blur', 0.0)
+            self.blur_sigma_range = self.augmentation_config.get('blur_sigma_range', [0.1, 2.0])
+            
+            # Random erasing
+            self.erasing_prob = self.augmentation_config.get('random_erasing', 0.0)
+            self.erasing_scale = self.augmentation_config.get('erasing_scale', (0.02, 0.33))
+            self.erasing_ratio = self.augmentation_config.get('erasing_ratio', (0.3, 3.3))
+            
         else:
             self.hflip_prob = 0.0
             self.vflip_prob = 0.0
             self.color_jitter = None
+            self.rotation_degrees = 0
+            self.scale_range = None
+            self.blur_prob = 0.0
+            self.erasing_prob = 0.0
         
         # CLIP tokenizer
         self.clip_tokenize = clip.tokenize
@@ -143,21 +165,39 @@ class MaskDatasetTransform:
         mask = sample['mask']
         text = sample['text']
         
-        # Resize
+        # Resize first (faster to do augmentations on smaller images)
         image = self.resize(image)
         mask = self.resize(mask)
         
-        # Apply augmentations (same for image and mask)
+        # Apply augmentations after resize (faster on smaller images)
+        if self.is_training:
+            # Random rotation (after resize for speed)
+            if self.rotation_degrees > 0:
+                angle = np.random.uniform(-self.rotation_degrees, self.rotation_degrees)
+                image = TF.rotate(image, angle, interpolation=TF.InterpolationMode.BILINEAR, fill=0)
+                mask = TF.rotate(mask, angle, interpolation=TF.InterpolationMode.NEAREST, fill=0)
+            
+            # Random scale/zoom (simplified - just disable for now to speed up)
+            # Scale augmentation is expensive, disabled by default
+            # if self.scale_range is not None:
+            #     pass  # Disabled for performance
+        
+        # Apply augmentations after resize
         if self.is_training:
             # Horizontal flip
             if torch.rand(1).item() < self.hflip_prob:
-                image = transforms.functional.hflip(image)
-                mask = transforms.functional.hflip(mask)
+                image = TF.hflip(image)
+                mask = TF.hflip(mask)
             
             # Vertical flip
             if torch.rand(1).item() < self.vflip_prob:
-                image = transforms.functional.vflip(image)
-                mask = transforms.functional.vflip(mask)
+                image = TF.vflip(image)
+                mask = TF.vflip(mask)
+            
+            # Gaussian blur (only for image)
+            if torch.rand(1).item() < self.blur_prob:
+                sigma = np.random.uniform(self.blur_sigma_range[0], self.blur_sigma_range[1])
+                image = image.filter(ImageFilter.GaussianBlur(radius=sigma))
             
             # Color jitter (only for image)
             if self.color_jitter is not None:
@@ -166,6 +206,26 @@ class MaskDatasetTransform:
         # Convert to tensor
         image_tensor = self.to_tensor(image)
         mask_tensor = self.to_tensor(mask)
+        
+        # Random erasing (on tensor, only for image)
+        if self.is_training and self.erasing_prob > 0 and torch.rand(1).item() < self.erasing_prob:
+            # Apply random erasing
+            if len(image_tensor.shape) == 3:
+                C, H, W = image_tensor.shape
+                area = H * W
+                
+                for _ in range(1):  # Try once
+                    erase_area = np.random.uniform(self.erasing_scale[0], self.erasing_scale[1]) * area
+                    aspect_ratio = np.random.uniform(self.erasing_ratio[0], self.erasing_ratio[1])
+                    
+                    h = int(round(np.sqrt(erase_area * aspect_ratio)))
+                    w = int(round(np.sqrt(erase_area / aspect_ratio)))
+                    
+                    if h < H and w < W:
+                        top = np.random.randint(0, H - h)
+                        left = np.random.randint(0, W - w)
+                        image_tensor[:, top:top+h, left:left+w] = torch.randn(C, h, w) * 0.5 + 0.5
+                        break
         
         # Normalize image
         image_tensor = self.normalize(image_tensor)

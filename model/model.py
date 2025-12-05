@@ -298,12 +298,13 @@ class CrossAttentionFusion(nn.Module):
 class DecoderBlock(nn.Module):
     """Single decoder block with upsampling and skip connections."""
     
-    def __init__(self, in_channels, skip_channels, out_channels):
+    def __init__(self, in_channels, skip_channels, out_channels, dropout=0.1):
         """
         Args:
             in_channels: Input channels from previous layer
             skip_channels: Channels from skip connection
             out_channels: Output channels
+            dropout: Dropout probability
         """
         super().__init__()
         
@@ -319,9 +320,11 @@ class DecoderBlock(nn.Module):
             nn.Conv2d(concat_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout)
         )
     
     def forward(self, x, skip):
@@ -348,12 +351,13 @@ class DecoderBlock(nn.Module):
 class MaskDecoder(nn.Module):
     """U-Net style decoder for mask prediction."""
     
-    def __init__(self, input_channels, skip_channels_list, base_channels=64):
+    def __init__(self, input_channels, skip_channels_list, base_channels=64, dropout=0.1):
         """
         Args:
             input_channels: Channels from fusion module
             skip_channels_list: List of channels for skip connections [C4, C3, C2, C1]
             base_channels: Base number of channels for decoder
+            dropout: Dropout probability
         """
         super().__init__()
         
@@ -361,16 +365,17 @@ class MaskDecoder(nn.Module):
         self.input_proj = nn.Conv2d(input_channels, base_channels * 16, kernel_size=1)
         
         # Decoder blocks (progressively upsample)
-        self.decoder4 = DecoderBlock(base_channels * 16, skip_channels_list[0], base_channels * 8)
-        self.decoder3 = DecoderBlock(base_channels * 8, skip_channels_list[1], base_channels * 4)
-        self.decoder2 = DecoderBlock(base_channels * 4, skip_channels_list[2], base_channels * 2)
-        self.decoder1 = DecoderBlock(base_channels * 2, skip_channels_list[3], base_channels)
+        self.decoder4 = DecoderBlock(base_channels * 16, skip_channels_list[0], base_channels * 8, dropout=dropout)
+        self.decoder3 = DecoderBlock(base_channels * 8, skip_channels_list[1], base_channels * 4, dropout=dropout)
+        self.decoder2 = DecoderBlock(base_channels * 4, skip_channels_list[2], base_channels * 2, dropout=dropout)
+        self.decoder1 = DecoderBlock(base_channels * 2, skip_channels_list[3], base_channels, dropout=dropout)
         
         # Final upsampling to original resolution
         self.final_upsample = nn.Sequential(
             nn.ConvTranspose2d(base_channels, base_channels, kernel_size=2, stride=2),
             nn.BatchNorm2d(base_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout)
         )
         
         # Output head (1x1 conv to single channel mask)
@@ -452,7 +457,8 @@ class MaskPredictionModel(nn.Module):
         self.decoder = MaskDecoder(
             input_channels=hidden_dim,
             skip_channels_list=skip_channels,
-            base_channels=config['model']['decoder']['base_channels']
+            base_channels=config['model']['decoder']['base_channels'],
+            dropout=config['model']['decoder'].get('dropout', 0.1)
         )
     
     def forward(self, image, text_tokens):
