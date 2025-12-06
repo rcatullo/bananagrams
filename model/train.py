@@ -333,7 +333,15 @@ def train(config, resume_checkpoint=None):
     logger.info("Creating dataloaders...")
     train_loader, val_loader = create_dataloaders(config)
     
-    # WebDataset doesn't have len(), so we can't print batch counts
+    # Get dataset length
+    num_train_samples = config['data'].get('num_train_samples')
+    if num_train_samples is None:
+        # Auto-detect from dataset
+        num_train_samples = len(train_loader.dataset)
+        logger.info(f"Auto-detected {num_train_samples} training samples")
+    else:
+        logger.info(f"Using configured {num_train_samples} training samples")
+    
     logger.info("Dataloaders created successfully")
     
     # Build model
@@ -344,7 +352,6 @@ def train(config, resume_checkpoint=None):
     param_counts = count_parameters(model)
     logger.info(f"Model parameters: {param_counts['total']:,} total, {param_counts['trainable']:,} trainable")
     
-    num_train_samples = config['data'].get('num_train_samples')
     batch_size = config['training']['batch_size']
     steps_per_epoch = (num_train_samples + batch_size - 1) // batch_size
     logger.info(f"Calculated steps per epoch: {steps_per_epoch} ({num_train_samples} samples / batch size {batch_size})")

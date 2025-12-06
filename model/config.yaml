@@ -10,10 +10,10 @@ model:
     
   # Cross-attention fusion
   fusion:
-    hidden_dim: 256  # Dimension for cross-attention (reduced from 512)
-    num_layers: 2  # Number of cross-attention layers (reduced from 4)
+    hidden_dim: 256  # Dimension for cross-attention
+    num_layers: 2  # Number of cross-attention layers
     num_heads: 8  # Number of attention heads
-    dropout: 0.3  # Increased from 0.1
+    dropout: 0.2
     
   decoder:
     base_channels: 32  # Reduced from 64
@@ -23,8 +23,8 @@ model:
 training:
   batch_size: 64  # Adjust based on GPU memory
   num_epochs: 50
-  learning_rate: 5.0e-5  # Reduced from 1.0e-4
-  weight_decay: 1.0e-3  # Increased from 1.0e-4 for stronger regularization
+  learning_rate: 5.0e-5
+  weight_decay: 1.0e-3 
   optimizer: "adamw"  # adamw, adam, sgd
   
   lr_scheduler: "cosine"  # cosine, step, plateau, none
@@ -43,40 +43,33 @@ training:
   save_best_only: true  # Save best model by validation IoU
 
 loss:
-  bce_weight: 1.0  # Binary cross-entropy weight
-  dice_weight: 1.0  # Dice loss weight
+  bce_weight: 0.5  # Binary cross-entropy weight
+  dice_weight: 1.5  # Dice loss weight
   
 data:
   image_size: 512  # Input resolution (square images)
   normalize_mean: [0.485, 0.456, 0.406]  # ImageNet normalization
   normalize_std: [0.229, 0.224, 0.225]
   
-  num_train_samples: 2560  # 10 shards × 256 samples (padded to 12 for 4 workers)
-  num_val_samples: 512 # 2 shards × 256 samples (padded to 4 for 4 workers)
-  num_test_samples: 512 # 2 shards × 256 samples (padded to 4 for 4 workers)
+  # HuggingFace dataset configuration
+  dataset_name: "BryanW/HumanEdit"  # HuggingFace dataset identifier
+  train_split: "train"  # Split name for training
+  val_split: "validation"  # Split name for validation (or "val" if available)
+  test_split: "test"  # Split name for testing
   
-  # Dataset paths (supports both local and S3)
-  # For S3: use s3://bucket-name/prefix format
-  # For local: use relative or absolute path
-  data_root: "s3://pico-banana-400k/processed/webdataset"
-  train_shards: "train/shard-{000000..000009}.tar"
-  val_shards: "val/shard-{000000..000001}.tar"
-  test_shards: "test/shard-{000000..000001}.tar"
+  # Dataset sizes (will be auto-detected from dataset, but can be overridden)
+  # num_train_samples: null  # Auto-detect from dataset length
+  # num_val_samples: null  # Auto-detect from dataset length
+  # num_test_samples: null  # Auto-detect from dataset length
   
-  # For local testing, uncomment:
-  #data_root: "../dataset/tmp_shards"
-  #train_shards: "shard-000000.tar"
-  #val_shards: "shard-000000.tar"
-  #test_shards: "shard-000000.tar"
-  
-  num_workers: 4  # Changed from 2 - virtual padding ensures shard divisibility
+  num_workers: 4
   prefetch_factor: 4
   pin_memory: true
   
   augmentation:
-    enabled: true
-    random_horizontal_flip: 0.5
-    random_vertical_flip: 0.3  # Added vertical flip
+    enabled: false
+    random_horizontal_flip: 0.0
+    random_vertical_flip: 0.0  # Added vertical flip
     color_jitter:
       brightness: 0.2  # Increased from 0.1
       contrast: 0.2  # Increased from 0.1

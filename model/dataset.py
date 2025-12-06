@@ -1,72 +1,220 @@
 """
-WebDataset data loader for image editing mask prediction.
+HuggingFace dataset loader for image editing mask prediction.
 
-Loads tar shards containing:
-- *.input.jpg: Input images
-- *.mask.png: Binary masks
-- *.text.txt: Edit instructions
+Loads from HuggingFace dataset "BryanW/HumanEdit" containing:
+- INPUT_IMG: Input images
+- MASK_IMG: Binary masks
+- EDITING_INSTRUCTION: Edit instructions
 """
 
 import os
 import io
-import re
-import math
 from typing import Dict, Optional, Callable
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 from PIL import Image, ImageFilter
 import numpy as np
-import webdataset as wds
+from datasets import load_dataset
 import clip
 
 
-def decode_sample(sample: Dict) -> Dict:
+class HuggingFaceMaskDataset(Dataset):
     """
-    Decode a single sample from WebDataset.
-    
-    Args:
-        sample: Dictionary with keys ending in .input.jpg, .mask.png, .text.txt
-    
-    Returns:
-        Dictionary with 'image', 'mask', 'text' keys
+    Dataset wrapper for HuggingFace HumanEdit dataset.
     """
-    # Find keys (they have prefixes like "images_positive-edit_1.png")
-    input_key = None
-    mask_key = None
-    text_key = None
     
-    for key in sample.keys():
-        if key.endswith('.input.jpg'):
-            input_key = key
-        elif key.endswith('.mask.png'):
-            mask_key = key
-        elif key.endswith('.text.txt'):
-            text_key = key
+    def __init__(
+        self,
+        dataset_name: str = "BryanW/HumanEdit",
+        split: str = "train",
+        transform: Optional[Callable] = None
+    ):
+        """
+        Args:
+            dataset_name: HuggingFace dataset identifier
+            split: Dataset split ('train', 'validation', 'test')
+            transform: Transform function to apply
+        """
+        self.transform = transform
+        
+        # Load dataset from HuggingFace
+        print(f"Loading dataset {dataset_name} split '{split}'...")
+        try:
+            self.dataset = load_dataset(dataset_name, split=split)
+        except ValueError as e:
+            # If split doesn't exist, create it from train split
+            if split in ["validation", "val", "test"]:
+                print(f"Split '{split}' not found. Creating '{split}' from 'train' split...")
+                try:
+                    # Load full train dataset (will be cached)
+                    train_dataset = load_dataset(dataset_name, split="train")
+                    total_size = len(train_dataset)
+                    
+                    # Deterministic split: 80% train, 10% val, 10% test
+                    train_size = int(total_size * 0.8)
+                    val_size = int(total_size * 0.1)
+                    
+                    if split in ["validation", "val"]:
+                        # Validation: indices [train_size : train_size + val_size]
+                        val_start = train_size
+                        val_end = min(train_size + val_size, total_size)
+                        self.dataset = train_dataset.select(range(val_start, val_end))
+                        print(f"Created validation split with {len(self.dataset)} samples (10% of train)")
+                    elif split == "test":
+                        # Test: indices [train_size + val_size : ]
+                        test_start = train_size + val_size
+                        self.dataset = train_dataset.select(range(test_start, total_size))
+                        print(f"Created test split with {len(self.dataset)} samples (10% of train)")
+                except Exception as e2:
+                    raise ValueError(f"Could not load dataset {dataset_name} or create split '{split}': {e2}")
+            elif split == "train":
+                # For train, if val/test don't exist, limit to 80% to leave room for them
+                # Check if val/test splits exist by trying to load them
+                has_val = False
+                try:
+                    _ = load_dataset(dataset_name, split="validation")
+                    has_val = True
+                except:
+                    try:
+                        _ = load_dataset(dataset_name, split="val")
+                        has_val = True
+                    except:
+                        pass
+                
+                if not has_val:
+                    # No validation split exists, limit train to 80% for future splits
+                    self.dataset = load_dataset(dataset_name, split="train")
+                    total_size = len(self.dataset)
+                    train_size = int(total_size * 0.8)
+                    self.dataset = self.dataset.select(range(0, train_size))
+                    print(f"Limited train split to {len(self.dataset)} samples (80% of total) for train/val/test split")
+                else:
+                    # Validation split exists, use full train
+                    self.dataset = load_dataset(dataset_name, split="train")
+            else:
+                raise e
+        
+        print(f"Loaded {len(self.dataset)} samples")
     
-    if not all([input_key, mask_key, text_key]):
-        raise ValueError(f"Missing required keys in sample. Found keys: {sample.keys()}")
+    def __len__(self):
+        return len(self.dataset)
     
-    # Decode image
-    image = Image.open(io.BytesIO(sample[input_key])).convert('RGB')
+    def _normalize_array_to_uint8(self, arr: np.ndarray) -> np.ndarray:
+        """Normalize array to uint8 format (0-255 range)."""
+        if arr.dtype != np.uint8:
+            if arr.max() <= 1.0:
+                arr = (arr * 255).astype(np.uint8)
+            else:
+                arr = arr.astype(np.uint8)
+        return arr
     
-    # Decode mask
-    mask = Image.open(io.BytesIO(sample[mask_key])).convert('L')
+    def _convert_to_pil_image(self, img_data, target_mode: str = 'RGB') -> Image.Image:
+        """
+        Convert various image formats to PIL Image.
+        
+        Args:
+            img_data: Image data (PIL Image, dict with bytes, numpy array, str, or bytes)
+            target_mode: Target PIL mode ('RGB' or 'L')
+        
+        Returns:
+            PIL Image in target mode
+        """
+        # Already a PIL Image
+        if isinstance(img_data, Image.Image):
+            return img_data.convert(target_mode) if img_data.mode != target_mode else img_data
+        
+        # Dict with bytes (HuggingFace format)
+        if isinstance(img_data, dict) and 'bytes' in img_data:
+            return Image.open(io.BytesIO(img_data['bytes'])).convert(target_mode)
+        
+        # Numpy array
+        if isinstance(img_data, np.ndarray):
+            arr = self._normalize_array_to_uint8(img_data)
+            
+            if target_mode == 'RGB':
+                if arr.ndim == 2:
+                    # Grayscale: convert to RGB
+                    return Image.fromarray(arr, mode='L').convert('RGB')
+                elif arr.ndim == 3:
+                    return Image.fromarray(arr).convert('RGB')
+                else:
+                    raise ValueError(f"Unexpected array shape for RGB: {arr.shape}")
+            else:  # target_mode == 'L'
+                if arr.ndim == 2:
+                    return Image.fromarray(arr, mode='L')
+                elif arr.ndim == 3:
+                    # Multi-channel: convert to grayscale
+                    return Image.fromarray(arr).convert('L')
+                else:
+                    raise ValueError(f"Unexpected array shape for grayscale: {arr.shape}")
+        
+        # String path or bytes
+        if isinstance(img_data, (str, bytes)):
+            source = io.BytesIO(img_data) if isinstance(img_data, bytes) else img_data
+            return Image.open(source).convert(target_mode)
+        
+        raise ValueError(f"Unexpected image type: {type(img_data)}")
     
-    # Decode text (already decoded by WebDataset's .decode())
-    text = sample[text_key]
-    if isinstance(text, bytes):
-        text = text.decode('utf-8')
-    text = text.strip()
+    def _process_mask_to_binary(self, mask_img: Image.Image) -> Image.Image:
+        """
+        Process mask image to ensure it's binary (0 or 255).
+        
+        Args:
+            mask_img: PIL Image mask in 'L' mode
+        
+        Returns:
+            Binary PIL Image in 'L' mode
+        """
+        # Convert to numpy array (already 2D since input is 'L' mode)
+        mask_array = np.array(mask_img, dtype=np.float32)
+        
+        # Normalize to 0-1 range and threshold to binary
+        if mask_array.max() > 1:
+            mask_array = mask_array / 255.0
+        mask_array = (mask_array > 0.5).astype(np.float32)
+        
+        # Convert back to PIL Image
+        return Image.fromarray((mask_array * 255).astype(np.uint8), mode='L')
     
-    return {
-        'image': image,
-        'mask': mask,
-        'text': text
-    }
+    def __getitem__(self, idx):
+        """
+        Get a single sample from the dataset.
+        
+        Args:
+            idx: Sample index
+        
+        Returns:
+            Dictionary with 'image', 'mask', 'text' keys (or transformed version)
+        """
+        sample = self.dataset[idx]
+        
+        # Extract and convert images
+        input_img = self._convert_to_pil_image(sample['INPUT_IMG'], target_mode='RGB')
+        mask_img = self._convert_to_pil_image(sample['MASK_IMG'], target_mode='L')
+        mask_img = self._process_mask_to_binary(mask_img)
+        
+        # Process text
+        text = sample.get('EDITING_INSTRUCTION', '')
+        if not isinstance(text, str):
+            text = str(text) if text is not None else ""
+        text = text.strip()
+        
+        # Create sample dictionary
+        sample_dict = {
+            'image': input_img,
+            'mask': mask_img,
+            'text': text
+        }
+        
+        # Apply transform if provided
+        if self.transform is not None:
+            sample_dict = self.transform(sample_dict)
+        
+        return sample_dict
 
 
 class MaskDatasetTransform:
@@ -245,97 +393,6 @@ class MaskDatasetTransform:
         }
 
 
-def create_webdataset(
-    data_root: str,
-    shard_pattern: str,
-    transform: Callable,
-    shuffle_buffer: int = 1000,
-    is_training: bool = True,
-    num_workers: int = 1
-):
-    """
-    Create WebDataset from tar shards (supports local paths and S3).
-    Implements virtual padding to ensure shard count is divisible by num_workers.
-    
-    Args:
-        data_root: Root directory/S3 bucket containing shards
-        shard_pattern: Pattern for shard files (e.g., "train/shard-{000000..000009}.tar")
-        transform: Transform function to apply
-        shuffle_buffer: Size of shuffle buffer
-        is_training: Whether this is training data
-        num_workers: Number of data loader workers (for padding calculation)
-    
-    Returns:
-        WebDataset instance
-    """
-    # Parse brace expansion pattern to build explicit shard list
-    # Pattern format: "train/shard-{000000..000009}.tar"
-    brace_match = re.search(r'\{(\d+)\.\.(\d+)\}', shard_pattern)
-    
-    if brace_match:
-        # Extract start and end indices
-        start_idx = int(brace_match.group(1))
-        end_idx = int(brace_match.group(2))
-        num_shards = end_idx - start_idx + 1
-        
-        # Get prefix and suffix
-        prefix = shard_pattern[:brace_match.start()]
-        suffix = shard_pattern[brace_match.end():]
-        
-        # Build list of shard paths
-        shard_list = []
-        for i in range(start_idx, end_idx + 1):
-            # Preserve zero-padding in format (e.g., 000000)
-            num_digits = len(brace_match.group(1))
-            shard_name = f"{prefix}{i:0{num_digits}d}{suffix}"
-            shard_list.append(shard_name)
-        
-        # Apply virtual padding if needed
-        if num_workers > 1 and num_shards % num_workers != 0:
-            # Calculate target count (round up to next multiple of num_workers)
-            target_count = math.ceil(num_shards / num_workers) * num_workers
-            padding_needed = target_count - num_shards
-            
-            # Cycle first shards to pad
-            for i in range(padding_needed):
-                shard_list.append(shard_list[i % num_shards])
-        
-        # Build full paths
-        if data_root.startswith('s3://'):
-            # S3 paths - use pipe notation for each shard
-            full_paths = [f"pipe:aws s3 cp {data_root}/{shard} -" for shard in shard_list]
-        else:
-            # Local paths
-            full_paths = [os.path.join(data_root, shard) for shard in shard_list]
-        
-        # Create dataset with explicit shard list
-        dataset = (
-            wds.WebDataset(full_paths, shardshuffle=1000 if is_training else False)
-            .decode()
-            .map(decode_sample)
-            .map(transform)
-        )
-    else:
-        # No brace expansion - single shard or already explicit list
-        if data_root.startswith('s3://'):
-            shard_path = f"pipe:aws s3 cp {data_root}/{shard_pattern} -"
-        else:
-            shard_path = os.path.join(data_root, shard_pattern)
-        
-        dataset = (
-            wds.WebDataset(shard_path, shardshuffle=1000 if is_training else False)
-            .decode()
-            .map(decode_sample)
-            .map(transform)
-        )
-    
-    # Shuffle for training
-    if is_training and shuffle_buffer > 0:
-        dataset = dataset.shuffle(shuffle_buffer)
-    
-    return dataset
-
-
 def collate_fn(batch):
     """
     Custom collate function for batching.
@@ -389,28 +446,25 @@ def create_dataloaders(config: Dict):
     )
     
     # Create datasets
-    train_dataset = create_webdataset(
-        data_root=data_config['data_root'],
-        shard_pattern=data_config['train_shards'],
-        transform=train_transform,
-        shuffle_buffer=1000,
-        is_training=True,
-        num_workers=data_config['num_workers']
+    dataset_name = data_config.get('dataset_name', 'BryanW/HumanEdit')
+    
+    train_dataset = HuggingFaceMaskDataset(
+        dataset_name=dataset_name,
+        split=data_config.get('train_split', 'train'),
+        transform=train_transform
     )
     
-    val_dataset = create_webdataset(
-        data_root=data_config['data_root'],
-        shard_pattern=data_config['val_shards'],
-        transform=val_transform,
-        shuffle_buffer=0,
-        is_training=False,
-        num_workers=data_config['num_workers']
+    val_dataset = HuggingFaceMaskDataset(
+        dataset_name=dataset_name,
+        split=data_config.get('val_split', 'validation'),
+        transform=val_transform
     )
     
     # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['training']['batch_size'],
+        shuffle=True,
         num_workers=data_config['num_workers'],
         pin_memory=data_config['pin_memory'],
         collate_fn=collate_fn,
@@ -421,6 +475,7 @@ def create_dataloaders(config: Dict):
     val_loader = DataLoader(
         val_dataset,
         batch_size=config['evaluation']['batch_size'],
+        shuffle=False,
         num_workers=data_config['num_workers'],
         pin_memory=data_config['pin_memory'],
         collate_fn=collate_fn,
@@ -453,19 +508,19 @@ def create_test_dataloader(config: Dict):
     )
     
     # Create dataset
-    test_dataset = create_webdataset(
-        data_root=data_config['data_root'],
-        shard_pattern=data_config['test_shards'],
-        transform=test_transform,
-        shuffle_buffer=0,
-        is_training=False,
-        num_workers=data_config['num_workers']
+    dataset_name = data_config.get('dataset_name', 'BryanW/HumanEdit')
+    
+    test_dataset = HuggingFaceMaskDataset(
+        dataset_name=dataset_name,
+        split=data_config.get('test_split', 'test'),
+        transform=test_transform
     )
     
     # Create dataloader
     test_loader = DataLoader(
         test_dataset,
         batch_size=config['evaluation']['batch_size'],
+        shuffle=False,
         num_workers=data_config['num_workers'],
         pin_memory=data_config['pin_memory'],
         collate_fn=collate_fn,
@@ -474,4 +529,3 @@ def create_test_dataloader(config: Dict):
     )
     
     return test_loader
-
