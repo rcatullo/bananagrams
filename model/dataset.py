@@ -192,7 +192,6 @@ class HuggingFaceMaskDataset(Dataset):
         """
         sample = self.dataset[idx]
         
-        # Extract and convert images
         input_img = self._convert_to_pil_image(sample['INPUT_IMG'], target_mode='RGB')
         mask_img = self._convert_to_pil_image(sample['MASK_IMG'], target_mode='L')
         mask_img = self._process_mask_to_binary(mask_img)

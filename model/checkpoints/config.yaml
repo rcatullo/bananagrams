@@ -1,0 +1,97 @@
+data:
+  augmentation:
+    blur_sigma_range:
+    - 0.1
+    - 1.0
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      hue: 0.1
+      saturation: 0.2
+    enabled: false
+    erasing_ratio:
+    - 0.3
+    - 3.3
+    erasing_scale:
+    - 0.02
+    - 0.15
+    random_blur: 0.2
+    random_erasing: 0.1
+    random_horizontal_flip: 0.0
+    random_rotation: 10
+    random_scale: null
+    random_vertical_flip: 0.0
+  dataset_name: BryanW/HumanEdit
+  image_size: 512
+  normalize_mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  normalize_std:
+  - 0.229
+  - 0.224
+  - 0.225
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 4
+  test_split: test
+  train_split: train
+  val_split: validation
+evaluation:
+  batch_size: 64
+  metrics:
+  - iou
+  - f1
+  - precision
+  - recall
+  - accuracy
+  threshold: 0.5
+logging:
+  experiment_name: mask_model
+  log_dir: logs
+  log_every_n_steps: 10
+  log_images_every_n_steps: 100
+  num_images_to_log: 4
+  tensorboard_dir: runs
+  use_tensorboard: true
+loss:
+  bce_weight: 0.5
+  dice_weight: 1.5
+model:
+  decoder:
+    base_channels: 32
+    dropout: 0.2
+    use_skip_connections: true
+  fusion:
+    dropout: 0.2
+    hidden_dim: 256
+    num_heads: 8
+    num_layers: 2
+  image_encoder:
+    backbone: resnet50
+    freeze: true
+    pretrained: true
+  text_encoder:
+    freeze: true
+    model_name: ViT-B/32
+system:
+  deterministic: false
+  device: cuda
+  num_threads: 4
+  seed: 42
+training:
+  batch_size: 64
+  checkpoint_dir: checkpoints
+  keep_last_n_checkpoints: 3
+  learning_rate: 5.0e-05
+  lr_scheduler: cosine
+  max_grad_norm: 1.0
+  min_lr: 1.0e-06
+  num_epochs: 50
+  optimizer: adamw
+  save_best_only: true
+  save_every_n_epochs: 5
+  use_amp: true
+  val_every_n_epochs: 1
+  warmup_epochs: 5
+  weight_decay: 0.001
